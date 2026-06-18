@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+openai
+twilio
+python-dotenv
+pydub
+SpeechRecognition
+SQLAlchemy
