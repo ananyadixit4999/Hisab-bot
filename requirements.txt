@@ -6,3 +6,5 @@ python-dotenv
 pydub
 SpeechRecognition
 SQLAlchemy
+python-multipart
+
