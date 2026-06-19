@@ -7,5 +7,6 @@ pydub
 SpeechRecognition
 SQLAlchemy
 requests
+groq
 python-multipart
 
