@@ -5,5 +5,4 @@ twilio
 groq
 python-multipart
 requests
-speech_recognition
-pydub
+
