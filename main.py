@@ -2,6 +2,7 @@ import os
 import sqlite3
 import uuid
 import json
+import re
 from datetime import datetime, time, timedelta
 
 # Core Framework Imports
@@ -114,6 +115,9 @@ def get_transaction_details_from_gpt(text):
         Also, detect the language of the text and include it in the JSON as 'language'.
         Supported languages are: Hindi, English, Hinglish, Punjabi.
         If the text is not a valid transaction, return an empty JSON object {{}}.
+        
+        CRITICAL: Return ONLY the JSON object string. Do not include markdown wraps (```json) or greetings.
+        
         Text: "{text}"
         """
         response = client.chat.completions.create(
@@ -122,6 +126,7 @@ def get_transaction_details_from_gpt(text):
             max_tokens=100,
             temperature=0,
         )
+        # FIXED: Added [0] index array tracker mapping for the Groq client object
         return response.choices[0].message.content.strip()
     except Exception as e:
         print(f"Error getting transaction details from Free AI: {e}")
@@ -144,7 +149,13 @@ async def whatsapp_webhook(
         if transcribed_text:
             transaction_details_json = get_transaction_details_from_gpt(transcribed_text)
             try:
-                clean_json = transaction_details_json.replace("```json", "").replace("```", "").strip()
+                # Extracts only the raw JSON boundary substring block matching { ... }
+                json_match = re.search(r"\{.*\}", transaction_details_json, re.DOTALL)
+                if json_match:
+                    clean_json = json_match.group(0).strip()
+                else:
+                    clean_json = "{}"
+
                 transaction_details = json.loads(clean_json)
                 if transaction_details and "amount" in transaction_details:
                     new_transaction = Transaction(
