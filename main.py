@@ -186,42 +186,39 @@ async def whatsapp_webhook(
     # YES
     if msg in ["हाँ", "ha", "haan", "yes"]:
 
-        pending = db.query(PendingTransaction).filter(
+            pending = db.query(PendingTransaction).filter(
             PendingTransaction.phone_number == From
         ).first()
 
         if pending:
-
-            data = json.loads(pending.data)
-
-            new_tx = Transaction(
-                id=str(uuid.uuid4()),
-                description=data.get("description", ""),
-                amount=float(data.get("amount", 0)),
-                language=data.get("language", "hi"),
-                status="confirmed"
-            )
-
-            db.add(new_tx)
             db.delete(pending)
             db.commit()
 
-            twiml.message(
-                "✅ हिसाब दर्ज कर लिया गया।"
-            )
-
-        else:
-            twiml.message(
-                "कोई लंबित एंट्री नहीं मिली।"
-            )
-
-        return Response(
-            content=str(twiml),
-            media_type="application/xml"
+        pending = PendingTransaction(
+            phone_number=From,
+            data=json.dumps(details)
         )
 
-    # NO
-    if msg in ["नहीं", "nahi", "nahin", "no"]:
+        db.add(pending)
+        db.commit()
+
+        twiml.message(
+            f"""मैंने यह समझा:
+
+{details.get('description', '')}
+
+राशि: ₹{amount}
+
+क्या यह सही है?
+
+उत्तर दें:
+
+हाँ
+
+या
+
+नहीं"""
+        )
 
         pending = db.query(PendingTransaction).filter(
             PendingTransaction.phone_number == From
