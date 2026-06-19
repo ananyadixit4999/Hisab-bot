@@ -1,13 +1,12 @@
 import os
 import sqlite3
 import uuid
+import json
 from datetime import datetime, time, timedelta
 
 import openai
-import speech_recognition as sr
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Form, Request
-from pydub import AudioSegment
 from sqlalchemy import (
     Column,
     DateTime,
@@ -39,7 +38,7 @@ twilio_client = Client(twilio_account_sid, twilio_auth_token)
 
 # OpenAI Configuration
 openai.api_key = os.getenv("OPENAI_API_KEY")
-
+client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 # --- Database Models ---
 class Transaction(Base):
@@ -51,7 +50,6 @@ class Transaction(Base):
     status = Column(String, default="pending")  # pending, confirmed, rejected
     created_at = Column(DateTime, default=datetime.utcnow)
 
-
 class NightlySummary(Base):
     __tablename__ = "nightly_summaries"
     id = Column(Integer, primary_key=True, index=True)
@@ -59,12 +57,10 @@ class NightlySummary(Base):
     total_transactions = Column(Integer)
     total_amount = Column(Float)
 
-
 Base.metadata.create_all(bind=engine)
 
 # --- FastAPI Application ---
 app = FastAPI()
-
 
 # --- Dependency ---
 def get_db():
@@ -74,42 +70,39 @@ def get_db():
     finally:
         db.close()
 
-
 # --- Helper Functions ---
 def send_whatsapp_message(to, message):
     try:
-        message = twilio_client.messages.create(
+        msg = twilio_client.messages.create(
             from_=f"whatsapp:{twilio_phone_number}",
             body=message,
             to=f"whatsapp:{to}",
         )
-        return message.sid
+        return msg.sid
     except Exception as e:
         print(f"Error sending WhatsApp message: {e}")
         return None
 
-
 def transcribe_audio(audio_url):
     try:
-        # Download and convert audio to WAV
-        audio_content = twilio_client.http_client.request("GET", audio_url)
-        audio = AudioSegment.from_file(
-            audio_content, format="ogg"
-        )  # Twilio sends ogg
-        wav_path = "temp.wav"
-        audio.export(wav_path, format="wav")
-
-        # Transcribe audio
-        recognizer = sr.Recognizer()
-        with sr.AudioFile(wav_path) as source:
-            audio_data = recognizer.record(source)
-        text = recognizer.recognize_google(audio_data)
-        os.remove(wav_path)
-        return text
+        # Download audio using twilio credentials
+        import requests
+        response = requests.get(audio_url, auth=(twilio_account_sid, twilio_auth_token))
+        ogg_path = "temp.ogg"
+        with open(ogg_path, "wb") as f:
+            f.write(response.content)
+            
+        # Send raw audio binary directly to OpenAI Whisper API
+        with open(ogg_path, "rb") as audio_file:
+            transcript = client.audio.transcriptions.create(
+                model="whisper-1", 
+                file=audio_file
+            )
+        os.remove(ogg_path)
+        return transcript.text
     except Exception as e:
         print(f"Error transcribing audio: {e}")
         return None
-
 
 def get_transaction_details_from_gpt(text):
     try:
@@ -120,21 +113,18 @@ def get_transaction_details_from_gpt(text):
         Also, detect the language of the text and include it in the JSON as 'language'.
         Supported languages are: Hindi, English, Hinglish, Punjabi.
         If the text is not a valid transaction, return an empty JSON object.
-
         Text: "{text}"
         """
-        response = openai.chat.completions.create(
+        response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": prompt}],
             max_tokens=100,
             temperature=0,
         )
-        details = response.choices[0].message.content.strip()
-        return details
+        return response.choices[0].message.content.strip()
     except Exception as e:
         print(f"Error getting transaction details from GPT: {e}")
         return "{}"
-
 
 # --- FastAPI Endpoints ---
 @app.post("/whatsapp")
@@ -151,51 +141,40 @@ async def whatsapp_webhook(
     if MediaUrl0:
         transcribed_text = transcribe_audio(MediaUrl0)
         if transcribed_text:
-            transaction_details_json = get_transaction_details_from_gpt(
-                transcribed_text
-            )
+            transaction_details_json = get_transaction_details_from_gpt(transcribed_text)
             try:
-                import json
-
-                transaction_details = json.loads(transaction_details_json)
-                if transaction_details:
-                    # Create a new pending transaction
+                # Strip out any markdown formatting if present
+                clean_json = transaction_details_json.replace("```json", "").replace("```", "").strip()
+                transaction_details = json.loads(clean_json)
+                if transaction_details and "amount" in transaction_details:
                     new_transaction = Transaction(
                         id=str(uuid.uuid4()),
-                        description=transaction_details["description"],
-                        amount=transaction_details["amount"],
-                        language=transaction_details["language"],
+                        description=transaction_details.get("description", "Udhaar"),
+                        amount=float(transaction_details["amount"]),
+                        language=transaction_details.get("language", "Hinglish"),
                         status="pending",
                     )
                     db.add(new_transaction)
                     db.commit()
                     db.refresh(new_transaction)
 
-                    # Send confirmation message
-                    confirmation_message = f"""
-                    Please confirm the following transaction:
-                    Description: {new_transaction.description}
-                    Amount: {new_transaction.amount}
+                    confirmation_message = f"""🔍 Hisab AI Check:
+मैने सुना: {new_transaction.description} को ₹{new_transaction.amount} का लेनदेन।
 
-                    Reply '1' to confirm, '2' to reject.
-                    (Transaction ID: {new_transaction.id})
-                    """
+क्या यह सही है?
+👍 हाँ के लिए '1' भेजें।
+👎 गलत है तो '2' भेजें."""
+                    
                     send_whatsapp_message(user_phone, confirmation_message)
-                    response.message("Processing your request...")
+                    return str(response)
                 else:
-                    response.message(
-                        "Could not understand the transaction from your voice message."
-                    )
-            except (json.JSONDecodeError, KeyError):
-                response.message(
-                    "Sorry, I could not process the details from your voice message."
-                )
+                    response.message("Could not understand the transaction details from your voice message.")
+            except Exception as e:
+                print(f"JSON parsing error: {e}")
+                response.message("Sorry, I could not process the details from your voice message.")
         else:
-            response.message(
-                "Sorry, I could not transcribe your voice message."
-            )
+            response.message("Sorry, I could not transcribe your voice message.")
     elif Body:
-        # Handle confirmation/rejection
         body_lower = Body.lower().strip()
         last_pending = (
             db.query(Transaction)
@@ -208,46 +187,16 @@ async def whatsapp_webhook(
             if body_lower == "1":
                 last_pending.status = "confirmed"
                 db.commit()
-                response.message("Transaction confirmed!")
+                response.message("✅ Transaction successfully saved in your Hisab ledger!")
             elif body_lower == "2":
                 last_pending.status = "rejected"
                 db.commit()
-                response.message("Transaction rejected.")
+                response.message("❌ Transaction cancelled.")
             else:
                 response.message("Invalid input. Please reply '1' to confirm or '2' to reject.")
         else:
-            response.message("No pending transaction found to confirm/reject.")
-
+            response.message("No pending transaction found to confirm or reject.")
     else:
-        response.message(
-            "Welcome to Hisab! Please send a voice message with your transaction details."
-        )
+        response.message("Welcome to Hisab! Please send a voice message with your transaction details.")
 
     return str(response)
-
-
-# --- Nightly Summary Logic ---
-def run_nightly_summary(db):
-    yesterday = datetime.utcnow().date() - timedelta(days=1)
-    start_of_day = datetime.combine(yesterday, time.min)
-    end_of_day = datetime.combine(yesterday, time.max)
-
-    confirmed_transactions = db.query(Transaction).filter(
-        Transaction.status == "confirmed",
-        Transaction.created_at >= start_of_day,
-        Transaction.created_at < end_of_day,
-    )
-
-    total_transactions = confirmed_transactions.count()
-    total_amount = confirmed_transactions.with_entities(
-        func.sum(Transaction.amount)
-    ).scalar()
-
-    if total_transactions > 0:
-        summary = NightlySummary(
-            date=yesterday,
-            total_transactions=total_transactions,
-            total_amount=total_amount if total_amount else 0.0
-        )
-        db.add(summary)
-        db.commit()
