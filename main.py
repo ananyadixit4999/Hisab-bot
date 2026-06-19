@@ -2,7 +2,7 @@ import os
 import uuid
 import json
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Optional
 
 from fastapi import FastAPI, Depends, Form
@@ -22,8 +22,7 @@ engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
 Base = declarative_base()
 
-
-# ---------------- MODEL ----------------
+# ---------------- MODELS ----------------
 class Transaction(Base):
     __tablename__ = "transactions"
 
@@ -33,7 +32,6 @@ class Transaction(Base):
     transaction_type = Column(String)  # given / received
     amount = Column(Float)
     category = Column(String, default="uncategorized")
-    language = Column(String)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
@@ -45,10 +43,16 @@ class PendingTransaction(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+class CustomerLimit(Base):
+    __tablename__ = "customer_limits"
+
+    phone_number = Column(String, primary_key=True)
+    person_name = Column(String, primary_key=True)
+    credit_limit = Column(Float, default=0)
+
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI()
-
 
 # ---------------- DB ----------------
 def get_db():
@@ -57,7 +61,6 @@ def get_db():
         yield db
     finally:
         db.close()
-
 
 # ---------------- AUDIO ----------------
 def transcribe_audio(url: str):
@@ -85,7 +88,6 @@ def transcribe_audio(url: str):
         print("audio error:", e)
         return None
 
-
 # ---------------- AI ----------------
 def extract_details(text: str):
     try:
@@ -108,26 +110,22 @@ Text:
 
 Rules:
 - को/दिए => given
-- से/लिया => received
-If no category → "uncategorized"
-
+- से/लिए => received
+If unknown category → "uncategorized"
 Return JSON only.
 """}
             ],
             temperature=0
         )
 
-        content = res.choices[0].message.content.strip()
-
+        content = res.choices[0].message.content
         start = content.find("{")
         end = content.rfind("}")
-
         return json.loads(content[start:end+1])
 
     except Exception as e:
         print("extract error:", e)
         return {}
-
 
 # ---------------- HELPERS ----------------
 def get_last_tx(db, phone):
@@ -145,7 +143,7 @@ async def whatsapp(
     twiml = MessagingResponse()
     msg = (Body or "").strip().lower()
 
-    # ---------------- TODAY ----------------
+    # ---------------- DAILY ----------------
     if Body and "आज का हिसाब" in Body:
         today = datetime.utcnow().date()
 
@@ -192,14 +190,14 @@ async def whatsapp(
 
         bal = given - received
 
-        msg = f"""📒 {name} का हिसाब
+        text = f"""📒 {name} का हिसाब
 
 दिया: ₹{given}
 लिया: ₹{received}
 
 {'बाकी लेना है' if bal>0 else 'बाकी देना है'}: ₹{abs(bal)}"""
 
-        twiml.message(msg)
+        twiml.message(text)
         return Response(content=str(twiml), media_type="application/xml")
 
     # ---------------- SEARCH ----------------
@@ -216,7 +214,7 @@ async def whatsapp(
         return Response(content=str(twiml), media_type="application/xml")
 
     # ---------------- DELETE LAST ----------------
-    if Body and "last delete" in msg:
+    if Body and "delete last" in msg:
         tx = get_last_tx(db, From)
         if tx:
             db.delete(tx)
@@ -227,14 +225,14 @@ async def whatsapp(
 
         return Response(content=str(twiml), media_type="application/xml")
 
-    # ---------------- YES ----------------
+    # ---------------- CONFIRM ----------------
     if msg in ["हाँ", "ha", "yes"]:
         pending = db.query(PendingTransaction).filter(
             PendingTransaction.phone_number == From
         ).first()
 
         if not pending:
-            twiml.message("No pending")
+            twiml.message("No pending transaction")
             return Response(content=str(twiml), media_type="application/xml")
 
         d = json.loads(pending.data)
@@ -267,7 +265,7 @@ async def whatsapp(
         d = extract_details(text)
 
         if not d:
-            twiml.message("Could not understand")
+            twiml.message("Not understood")
             return Response(content=str(twiml), media_type="application/xml")
 
         pending = PendingTransaction(
@@ -281,11 +279,11 @@ async def whatsapp(
         twiml.message(f"""Understood:
 {d['description']}
 ₹{d['amount']}
-Confirm?""")
+Confirm? (हाँ/नहीं)""")
 
     except Exception as e:
         print(e)
-        twiml.message("Error")
+        twiml.message("Error occurred")
 
     return Response(content=str(twiml), media_type="application/xml")
 
