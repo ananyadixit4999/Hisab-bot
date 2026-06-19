@@ -4,9 +4,12 @@ import uuid
 import json
 from datetime import datetime, time, timedelta
 
+# Core Framework Imports
+from fastapi import FastAPI, Request, Depends, Form
 from groq import Groq
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, Form, Request
+
+# Database Imports
 from sqlalchemy import (
     Column,
     DateTime,
@@ -37,8 +40,7 @@ twilio_phone_number = os.getenv("TWILIO_PHONE_NUMBER")
 twilio_client = Client(twilio_account_sid, twilio_auth_token)
 
 # Groq Free AI Client Configuration
-# We use the same environment variable slot to save time
-client = Groq(api_key=os.getenv("OPENAI_API_KEY"))
+client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
 # --- Database Models ---
 class Transaction(Base):
