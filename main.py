@@ -197,36 +197,40 @@ async def whatsapp_webhook(
     msg = (Body or "").strip().lower()
 
     # YES = Save pending transaction
-    if msg in ["हाँ", "ha", "haan", "yes"]:
+   if msg in ["हाँ", "ha", "haan", "yes"]:
 
-        pending = db.query(PendingTransaction).filter(
-            PendingTransaction.phone_number == From
-        ).first()
+    pending = db.query(PendingTransaction).filter(
+        PendingTransaction.phone_number == From
+    ).first()
 
-        if pending:
+    if not pending:
+        twiml.message("कोई लंबित एंट्री नहीं मिली।")
+        return Response(content=str(twiml), media_type="application/xml")
 
-            data = json.loads(pending.data)
+    details = json.loads(pending.data)
 
+    try:
         new_tx = Transaction(
-        amount=float(details["amount"]),
-        description=details["description"],
-        person_name=details["person_name"],
-        transaction_type=details["transaction_type"]
-)
-
-            db.add(new_tx)
-            db.delete(pending)
-            db.commit()
-
-            twiml.message("✅ हिसाब दर्ज कर लिया गया।")
-
-        else:
-            twiml.message("कोई लंबित एंट्री नहीं मिली।")
-
-        return Response(
-            content=str(twiml),
-            media_type="application/xml"
+            id=str(uuid.uuid4()),
+            amount=float(details["amount"]),
+            description=details["description"],
+            person_name=details["person_name"],
+            transaction_type=details["transaction_type"],
+            language=details.get("language", "")
         )
+
+        db.add(new_tx)
+        db.delete(pending)
+        db.commit()
+
+        twiml.message("✅ हिसाब दर्ज कर लिया गया।")
+
+    except Exception as e:
+        db.rollback()
+        print("DB Error:", e)
+        twiml.message("डेटा सेव करने में समस्या हुई।")
+
+    return Response(content=str(twiml), media_type="application/xml")
 
     # NO = Cancel pending transaction
     if msg in ["नहीं", "nahi", "nahin", "no"]:
@@ -266,14 +270,34 @@ async def whatsapp_webhook(
 
         details = extract_details(text_to_process)
 
-        if not details or "amount" not in details:
-            twiml.message(
-                "लेन-देन की जानकारी नहीं मिली। कृपया फिर से प्रयास करें।"
-            )
-            return Response(
-                content=str(twiml),
-                media_type="application/xml"
-            )
+       if Body and "का हिसाब" in Body:
+        name = Body.replace("का हिसाब", "").strip()
+    
+        txs = db.query(Transaction).filter(
+            Transaction.person_name == name
+        ).all()
+    
+        given = sum(t.amount for t in txs if t.transaction_type == "given")
+        received = sum(t.amount for t in txs if t.transaction_type == "received")
+    
+        balance = given - received
+    
+        if balance > 0:
+            text = f"""📒 {name} का हिसाब
+    दिया: ₹{given}
+    लिया: ₹{received}
+    
+    बाकी लेना है: ₹{balance}"""
+        else:
+            text = f"""📒 {name} का हिसाब
+    
+    दिया: ₹{given}
+    लिया: ₹{received}
+    
+    बाकी देना है: ₹{abs(balance)}"""
+    
+        twiml.message(text)
+        return Response(content=str(twiml), media_type="application/xml")
 
         try:
             amount = float(
