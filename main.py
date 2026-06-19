@@ -19,7 +19,6 @@ from sqlalchemy import (
     Integer,
     String,
     create_engine,
-    func,
 )
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
@@ -41,7 +40,7 @@ twilio_auth_token = os.getenv("TWILIO_AUTH_TOKEN")
 twilio_phone_number = os.getenv("TWILIO_PHONE_NUMBER")
 twilio_client = Client(twilio_account_sid, twilio_auth_token)
 
-# Groq Free AI Client Configuration
+# Groq Client Configuration
 client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
 # --- Database Models ---
@@ -88,6 +87,7 @@ def send_whatsapp_message(to, message):
         return None
 
 def transcribe_audio(audio_url):
+    ogg_path = "temp.ogg"
     try:
         response = requests.get(audio_url, auth=(twilio_account_sid, twilio_auth_token), allow_redirects=True)
         
@@ -95,14 +95,13 @@ def transcribe_audio(audio_url):
             print(f"Failed to download audio from Twilio. Status code: {response.status_code}")
             return None
             
-        ogg_path = "temp.ogg"
         with open(ogg_path, "wb") as f:
             f.write(response.content)
             
         with open(ogg_path, "rb") as audio_file:
             transcript = client.audio.transcriptions.create(
                 model="whisper-large-v3", 
-                file=("temp.ogg", audio_file, "audio/ogg")
+                file=(ogg_path, audio_file, "audio/ogg")
             )
         
         if os.path.exists(ogg_path):
@@ -135,7 +134,6 @@ def get_transaction_details_from_gpt(text):
             max_tokens=100,
             temperature=0,
         )
-        # VERIFIED FIX: Added the exact target list array position tracker index
         return response.choices[0].message.content.strip()
     except Exception as e:
         print(f"Error getting transaction details from Free AI: {e}")
