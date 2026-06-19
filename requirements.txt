@@ -1,12 +1,9 @@
 fastapi
 uvicorn
-openai
+sqlalchemy
 twilio
-python-dotenv
-pydub
-SpeechRecognition
-SQLAlchemy
-requests
 groq
 python-multipart
-
+requests
+speech_recognition
+pydub
