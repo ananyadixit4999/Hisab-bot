@@ -197,7 +197,7 @@ async def whatsapp_webhook(
     msg = (Body or "").strip().lower()
 
     # YES = Save pending transaction
-   if msg in ["हाँ", "ha", "haan", "yes"]:
+    if msg in ["हाँ", "ha", "haan", "yes"]:
 
     pending = db.query(PendingTransaction).filter(
         PendingTransaction.phone_number == From
