@@ -1,10 +1,9 @@
-fastapi
-uvicorn
-sqlalchemy
-twilio
-groq
-python-multipart
-requests
-python-dotenv
-
+fastapi>=0.100.0
+uvicorn>=0.22.0
+sqlalchemy>=2.0.0
+twilio>=8.0.0
+groq>=0.3.0
+python-multipart>=0.0.6
+requests>=2.31.0
+python-dotenv>=1.0.0
 
