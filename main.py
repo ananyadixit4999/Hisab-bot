@@ -19,7 +19,7 @@ load_dotenv()
 DATABASE_URL = "sqlite:///./hisab.db"
 
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
-SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+SessionLocal = sessionmaker(bind=engine)
 Base = declarative_base()
 
 # ---------------- MODELS ----------------
@@ -36,19 +36,19 @@ class Transaction(Base):
 
 
 class PendingTransaction(Base):
-    __tablename__ = "pending_transactions"
+    __tablename__ = "pending"
 
     phone_number = Column(String, primary_key=True)
     data = Column(String)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
-class CustomerLimit(Base):
-    __tablename__ = "customer_limits"
+class CreditLimit(Base):
+    __tablename__ = "credit_limit"
 
     phone_number = Column(String, primary_key=True)
     person_name = Column(String, primary_key=True)
-    credit_limit = Column(Float, default=0)
+    limit = Column(Float, default=0)
 
 Base.metadata.create_all(bind=engine)
 
@@ -69,23 +69,23 @@ def transcribe_audio(url: str):
         r = requests.get(url, auth=auth, timeout=30)
         r.raise_for_status()
 
-        fname = f"{uuid.uuid4()}.ogg"
-        with open(fname, "wb") as f:
+        file = f"{uuid.uuid4()}.ogg"
+        with open(file, "wb") as f:
             f.write(r.content)
 
         client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
-        with open(fname, "rb") as f:
+        with open(file, "rb") as f:
             res = client.audio.transcriptions.create(
                 model="whisper-large-v3",
-                file=(fname, f.read())
+                file=(file, f.read())
             )
 
-        os.remove(fname)
+        os.remove(file)
         return res.text
 
     except Exception as e:
-        print("audio error:", e)
+        print("audio error", e)
         return None
 
 # ---------------- AI ----------------
@@ -109,9 +109,9 @@ Text:
 {text}
 
 Rules:
-- को/दिए => given
-- से/लिए => received
-If unknown category → "uncategorized"
+- दिया/को/उधार => given
+- लिया/से => received
+
 Return JSON only.
 """}
             ],
@@ -123,16 +123,14 @@ Return JSON only.
         end = content.rfind("}")
         return json.loads(content[start:end+1])
 
-    except Exception as e:
-        print("extract error:", e)
+    except:
         return {}
 
-# ---------------- HELPERS ----------------
-def get_last_tx(db, phone):
+# ---------------- HELP ----------------
+def last_tx(db):
     return db.query(Transaction).order_by(Transaction.created_at.desc()).first()
 
-
-# ---------------- WEBHOOK ----------------
+# ---------------- APP ----------------
 @app.post("/whatsapp")
 async def whatsapp(
     From: str = Form(...),
@@ -141,7 +139,7 @@ async def whatsapp(
     db: Session = Depends(get_db)
 ):
     twiml = MessagingResponse()
-    msg = (Body or "").strip().lower()
+    msg = (Body or "").lower()
 
     # ---------------- DAILY ----------------
     if Body and "आज का हिसाब" in Body:
@@ -153,29 +151,29 @@ async def whatsapp(
 
         total = sum(t.amount for t in txs)
 
-        text = "📅 आज का हिसाब\n\n"
+        text = "📅 आज का हिसाब\n"
         text += "\n".join([f"{t.description} - ₹{t.amount}" for t in txs])
         text += f"\n\nकुल: ₹{total}"
 
         twiml.message(text)
-        return Response(content=str(twiml), media_type="application/xml")
+        return Response(str(twiml), media_type="application/xml")
 
     # ---------------- MONTH ----------------
     if Body and "इस महीने का हिसाब" in Body:
-        month_start = datetime.utcnow().replace(day=1)
+        start = datetime.utcnow().replace(day=1)
 
         txs = db.query(Transaction).filter(
-            Transaction.created_at >= month_start
+            Transaction.created_at >= start
         ).all()
 
         total = sum(t.amount for t in txs)
 
-        text = "📆 इस महीने का हिसाब\n\n"
+        text = "📆 इस महीने का हिसाब\n"
         text += "\n".join([f"{t.description} - ₹{t.amount}" for t in txs])
         text += f"\n\nकुल: ₹{total}"
 
         twiml.message(text)
-        return Response(content=str(twiml), media_type="application/xml")
+        return Response(str(twiml), media_type="application/xml")
 
     # ---------------- LEDGER ----------------
     if Body and "का हिसाब" in Body:
@@ -198,7 +196,7 @@ async def whatsapp(
 {'बाकी लेना है' if bal>0 else 'बाकी देना है'}: ₹{abs(bal)}"""
 
         twiml.message(text)
-        return Response(content=str(twiml), media_type="application/xml")
+        return Response(str(twiml), media_type="application/xml")
 
     # ---------------- SEARCH ----------------
     if Body and "ढूंढ" in Body:
@@ -211,19 +209,19 @@ async def whatsapp(
         text = "\n".join([f"{t.description} - ₹{t.amount}" for t in txs]) or "कुछ नहीं मिला"
 
         twiml.message(text)
-        return Response(content=str(twiml), media_type="application/xml")
+        return Response(str(twiml), media_type="application/xml")
 
     # ---------------- DELETE LAST ----------------
     if Body and "delete last" in msg:
-        tx = get_last_tx(db, From)
+        tx = last_tx(db)
         if tx:
             db.delete(tx)
             db.commit()
-            twiml.message("Last entry deleted")
+            twiml.message("Deleted last entry")
         else:
-            twiml.message("No entry found")
+            twiml.message("No data")
 
-        return Response(content=str(twiml), media_type="application/xml")
+        return Response(str(twiml), media_type="application/xml")
 
     # ---------------- CONFIRM ----------------
     if msg in ["हाँ", "ha", "yes"]:
@@ -232,8 +230,8 @@ async def whatsapp(
         ).first()
 
         if not pending:
-            twiml.message("No pending transaction")
-            return Response(content=str(twiml), media_type="application/xml")
+            twiml.message("No pending")
+            return Response(str(twiml), media_type="application/xml")
 
         d = json.loads(pending.data)
 
@@ -251,7 +249,7 @@ async def whatsapp(
         db.commit()
 
         twiml.message("Saved ✅")
-        return Response(content=str(twiml), media_type="application/xml")
+        return Response(str(twiml), media_type="application/xml")
 
     # ---------------- INPUT ----------------
     try:
@@ -260,13 +258,13 @@ async def whatsapp(
             text = transcribe_audio(MediaUrl0)
 
         if not text:
-            return Response(content=str(twiml), media_type="application/xml")
+            return Response(str(twiml), media_type="application/xml")
 
         d = extract_details(text)
 
         if not d:
             twiml.message("Not understood")
-            return Response(content=str(twiml), media_type="application/xml")
+            return Response(str(twiml), media_type="application/xml")
 
         pending = PendingTransaction(
             phone_number=From,
@@ -279,16 +277,15 @@ async def whatsapp(
         twiml.message(f"""Understood:
 {d['description']}
 ₹{d['amount']}
-Confirm? (हाँ/नहीं)""")
+Confirm?""")
 
     except Exception as e:
         print(e)
-        twiml.message("Error occurred")
+        twiml.message("Error")
 
-    return Response(content=str(twiml), media_type="application/xml")
+    return Response(str(twiml), media_type="application/xml")
 
 
-# ---------------- HEALTH ----------------
 @app.get("/")
 def health():
     return {"status": "ok"}
