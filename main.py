@@ -6,6 +6,7 @@ from datetime import datetime, time, timedelta
 
 # Core Framework Imports
 from fastapi import FastAPI, Request, Depends, Form
+from fastapi.responses import Response
 from groq import Groq
 from dotenv import load_dotenv
 
@@ -29,7 +30,7 @@ load_dotenv()
 
 # --- Environment and API Key Setup ---
 DATABASE_URL = "sqlite:///./hisab.db"
-engine = create_engine(DATABASE_URL)
+engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
@@ -165,7 +166,7 @@ async def whatsapp_webhook(
 👎 गलत है तो '2' भेजें।"""
                     
                     send_whatsapp_message(user_phone, confirmation_message)
-                    return str(response)
+                    return Response(content=str(response), media_type="application/xml")
                 else:
                     response.message("Could not understand the transaction details from your voice message.")
             except Exception as e:
@@ -198,4 +199,4 @@ async def whatsapp_webhook(
     else:
         response.message("Welcome to Hisab! Please send a voice message with your transaction details.")
 
-    return str(response)
+    return Response(content=str(response), media_type="application/xml")
