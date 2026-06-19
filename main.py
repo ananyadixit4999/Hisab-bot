@@ -1,8 +1,7 @@
-
 import os
 import sqlite3
 import uuid
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 
 import openai
 import speech_recognition as sr
@@ -124,13 +123,13 @@ def get_transaction_details_from_gpt(text):
 
         Text: "{text}"
         """
-        response = openai.Completion.create(
+        response = openai.chat.completions.create(
             model="gpt-4o-mini",
-            prompt=prompt,
+            messages=[{"role": "user", "content": prompt}],
             max_tokens=100,
             temperature=0,
         )
-        details = response.choices[0].text.strip()
+        details = response.choices[0].message.content.strip()
         return details
     except Exception as e:
         print(f"Error getting transaction details from GPT: {e}")
@@ -198,9 +197,6 @@ async def whatsapp_webhook(
     elif Body:
         # Handle confirmation/rejection
         body_lower = Body.lower().strip()
-        # Find the last pending transaction for this user to confirm/reject.
-        # Note: A more robust solution might involve caching the transaction ID
-        # per user or using a more sophisticated state management.
         last_pending = (
             db.query(Transaction)
             .filter(Transaction.status == "pending")
@@ -249,47 +245,9 @@ def run_nightly_summary(db):
 
     if total_transactions > 0:
         summary = NightlySummary(
-            date=start_of_day,
+            date=yesterday,
             total_transactions=total_transactions,
-            total_amount=total_amount or 0,
+            total_amount=total_amount if total_amount else 0.0
         )
         db.add(summary)
         db.commit()
-        print(f"Nightly summary for {yesterday} created.")
-
-
-# You would run this function with a scheduler like APScheduler or a cron job.
-# For simplicity, here's a manual trigger endpoint (remove in production).
-@app.post("/trigger-nightly-summary")
-async def trigger_nightly_summary_endpoint(db=Depends(get_db)):
-    run_nightly_summary(db)
-    return {"message": "Nightly summary job triggered."}
-
-
-if __name__ == "__main__":
-    import uvicorn
-    from datetime import timedelta
-    import threading
-
-    # In a real production app, use a more robust scheduler.
-    def schedule_nightly_job():
-        import time as time_module
-
-        while True:
-            now = datetime.utcnow()
-            # Schedule to run at around 1 AM UTC
-            run_time = now.replace(
-                hour=1, minute=0, second=0, microsecond=0
-            )
-            if now > run_time:
-                run_time += timedelta(days=1)
-            sleep_seconds = (run_time - now).total_seconds()
-            time_module.sleep(sleep_seconds)
-            with SessionLocal() as db:
-                run_nightly_summary(db)
-
-    scheduler_thread = threading.Thread(target=schedule_nightly_job, daemon=True)
-    scheduler_thread.start()
-
-    uvicorn.run(app, host="0.0.0.0", port=8000)
-
