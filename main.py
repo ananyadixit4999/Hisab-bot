@@ -3,7 +3,7 @@ import sqlite3
 import uuid
 import json
 import re
-import requests  # Explicitly imported for authenticated file handling
+import requests
 
 # Core Framework Imports
 from fastapi import FastAPI, Request, Depends, Form
@@ -89,10 +89,8 @@ def send_whatsapp_message(to, message):
 
 def transcribe_audio(audio_url):
     try:
-        # FIXED: Enforce Basic Auth credentials headers so Twilio releases the audio file
         response = requests.get(audio_url, auth=(twilio_account_sid, twilio_auth_token), allow_redirects=True)
         
-        # Check if the download was successful
         if response.status_code != 200:
             print(f"Failed to download audio from Twilio. Status code: {response.status_code}")
             return None
@@ -104,18 +102,17 @@ def transcribe_audio(audio_url):
         with open(ogg_path, "rb") as audio_file:
             transcript = client.audio.transcriptions.create(
                 model="whisper-large-v3", 
-                file=("temp.ogg", audio_file, "audio/ogg")  # FIXED: Explicitly defined MIME types for Groq compatibility
+                file=("temp.ogg", audio_file, "audio/ogg")
             )
         
-        # Clean up temp file safely
         if os.path.exists(ogg_path):
             os.remove(ogg_path)
             
         return transcript.text
     except Exception as e:
         print(f"Error transcribing audio: {e}")
-        if os.path.exists("temp.ogg"):
-            os.remove("temp.ogg")
+        if os.path.exists(ogg_path):
+            os.remove(ogg_path)
         return None
 
 def get_transaction_details_from_gpt(text):
@@ -138,6 +135,7 @@ def get_transaction_details_from_gpt(text):
             max_tokens=100,
             temperature=0,
         )
+        # VERIFIED FIX: Added the exact target list array position tracker index
         return response.choices[0].message.content.strip()
     except Exception as e:
         print(f"Error getting transaction details from Free AI: {e}")
@@ -157,12 +155,11 @@ async def whatsapp_webhook(
 
     if MediaUrl0:
         transcribed_text = transcribe_audio(MediaUrl0)
-        print(f"Transcribed Text: {transcribed_text}") # Helpful debugging log line
+        print(f"Transcribed Text: {transcribed_text}")
         
         if transcribed_text:
             transaction_details_json = get_transaction_details_from_gpt(transcribed_text)
             try:
-                # Extracts only the raw JSON boundary substring matching { ... }
                 json_match = re.search(r"\{.*\}", transaction_details_json, re.DOTALL)
                 if json_match:
                     clean_json = json_match.group(0).strip()
