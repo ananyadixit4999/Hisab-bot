@@ -37,6 +37,8 @@ class Transaction(Base):
 
     id = Column(String, primary_key=True, index=True)
     description = Column(String, index=True)
+    person_name = Column(String)
+    transaction_type = Column(String)  # "given" or "received"
     amount = Column(Float)
     language = Column(String)
     status = Column(String, default="pending")
@@ -128,7 +130,17 @@ Extract transaction information from:
 
 {text}
 
-Return ONLY JSON:
+Extract:
+- description
+- amount
+- person_name
+- transaction_type (given or received only)
+
+Rules:
+- "को / दिए / उधार दिए" => given
+- "से लिए / वापस लिए / लौटाए" => received
+
+Return ONLY JSON.
 
 {{
   "description": "string",
@@ -195,13 +207,12 @@ async def whatsapp_webhook(
 
             data = json.loads(pending.data)
 
-            new_tx = Transaction(
-                id=str(uuid.uuid4()),
-                description=data.get("description", ""),
-                amount=float(str(data.get("amount", 0)).replace(",", "")),
-                language=data.get("language", "hi"),
-                status="confirmed"
-            )
+        new_tx = Transaction(
+        amount=float(details["amount"]),
+        description=details["description"],
+        person_name=details["person_name"],
+        transaction_type=details["transaction_type"]
+)
 
             db.add(new_tx)
             db.delete(pending)
