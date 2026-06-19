@@ -2,7 +2,7 @@ import os
 import uuid
 import json
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 from fastapi import FastAPI, Depends, Form
@@ -42,13 +42,6 @@ class PendingTransaction(Base):
     data = Column(String)
     created_at = Column(DateTime, default=datetime.utcnow)
 
-
-class CreditLimit(Base):
-    __tablename__ = "credit_limit"
-
-    phone_number = Column(String, primary_key=True)
-    person_name = Column(String, primary_key=True)
-    limit = Column(Float, default=0)
 
 Base.metadata.create_all(bind=engine)
 
@@ -126,9 +119,27 @@ Return JSON only.
     except:
         return {}
 
-# ---------------- HELP ----------------
+# ---------------- HELPERS ----------------
 def last_tx(db):
     return db.query(Transaction).order_by(Transaction.created_at.desc()).first()
+
+# ---------------- REMINDER ENGINE ----------------
+def build_reminders(db):
+    txs = db.query(Transaction).filter(Transaction.transaction_type == "given").all()
+
+    reminders = []
+    now = datetime.utcnow()
+
+    for t in txs:
+        days = (now - t.created_at).days
+
+        reminders.append({
+            "name": t.person_name,
+            "amount": t.amount,
+            "days": days
+        })
+
+    return reminders
 
 # ---------------- APP ----------------
 @app.post("/whatsapp")
@@ -140,6 +151,45 @@ async def whatsapp(
 ):
     twiml = MessagingResponse()
     msg = (Body or "").lower()
+
+    # ---------------- REMINDER (NEW) ----------------
+    if Body and "remind" in msg or "याद" in msg:
+        reminders = build_reminders(db)
+
+        if not reminders:
+            twiml.message("No pending dues 🎉")
+            return Response(str(twiml), media_type="application/xml")
+
+        text = "🔔 Pending Payments:\n\n"
+
+        for r in reminders:
+            text += f"{r['name']} - ₹{r['amount']} ({r['days']} days)\n"
+
+        twiml.message(text)
+        return Response(str(twiml), media_type="application/xml")
+
+    # ---------------- LEDGER ----------------
+    if Body and "का हिसाब" in Body:
+        name = Body.replace("का हिसाब", "").strip()
+
+        txs = db.query(Transaction).filter(
+            Transaction.person_name == name
+        ).all()
+
+        given = sum(t.amount for t in txs if t.transaction_type == "given")
+        received = sum(t.amount for t in txs if t.transaction_type == "received")
+
+        bal = given - received
+
+        text = f"""📒 {name} का हिसाब
+
+दिया: ₹{given}
+लिया: ₹{received}
+
+{'बाकी लेना है' if bal>0 else 'बाकी देना है'}: ₹{abs(bal)}"""
+
+        twiml.message(text)
+        return Response(str(twiml), media_type="application/xml")
 
     # ---------------- DAILY ----------------
     if Body and "आज का हिसाब" in Body:
@@ -171,29 +221,6 @@ async def whatsapp(
         text = "📆 इस महीने का हिसाब\n"
         text += "\n".join([f"{t.description} - ₹{t.amount}" for t in txs])
         text += f"\n\nकुल: ₹{total}"
-
-        twiml.message(text)
-        return Response(str(twiml), media_type="application/xml")
-
-    # ---------------- LEDGER ----------------
-    if Body and "का हिसाब" in Body:
-        name = Body.replace("का हिसाब", "").strip()
-
-        txs = db.query(Transaction).filter(
-            Transaction.person_name == name
-        ).all()
-
-        given = sum(t.amount for t in txs if t.transaction_type == "given")
-        received = sum(t.amount for t in txs if t.transaction_type == "received")
-
-        bal = given - received
-
-        text = f"""📒 {name} का हिसाब
-
-दिया: ₹{given}
-लिया: ₹{received}
-
-{'बाकी लेना है' if bal>0 else 'बाकी देना है'}: ₹{abs(bal)}"""
 
         twiml.message(text)
         return Response(str(twiml), media_type="application/xml")
