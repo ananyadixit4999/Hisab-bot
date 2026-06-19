@@ -90,7 +90,7 @@ def transcribe_audio(audio_url: str):
         return transcript.text
 
     except Exception as e:
-        print(f"Transcription Error: {e}")
+        print("Transcription Error:", e)
         return None
 
     finally:
@@ -103,43 +103,63 @@ def extract_details(text: str):
     try:
         client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
-        prompt = f"""
-Extract transaction information from the text below.
-
-Return ONLY valid JSON in this format:
-
-{{
-    "description": "string",
-    "amount": number,
-    "language": "string"
-}}
-
-Text:
-{text}
-"""
-
         response = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[
-                {"role": "user", "content": prompt}
+                {
+                    "role": "system",
+                    "content": (
+                        "You extract expense transactions. "
+                        "Return ONLY valid JSON."
+                    )
+                },
+                {
+                    "role": "user",
+                    "content": f"""
+Extract transaction information from:
+
+{text}
+
+Return ONLY JSON:
+
+{{
+  "description": "string",
+  "amount": number,
+  "language": "string"
+}}
+"""
+                }
             ],
             temperature=0
         )
 
-        content = response.choices[0].message.content.strip()
+        content = response.choices[0].message.content
 
-        # Remove markdown code fences if present
-        if content.startswith("```"):
-            content = (
-                content.replace("```json", "")
-                .replace("```", "")
-                .strip()
-            )
+        print("RAW GROQ RESPONSE:", repr(content))
+
+        if not content:
+            return {}
+
+        content = content.strip()
+
+        # Remove markdown formatting if model adds it
+        content = content.replace("```json", "")
+        content = content.replace("```", "")
+        content = content.strip()
+
+        # Extract JSON object if extra text is present
+        start = content.find("{")
+        end = content.rfind("}")
+
+        if start == -1 or end == -1:
+            return {}
+
+        content = content[start:end + 1]
 
         return json.loads(content)
 
     except Exception as e:
-        print(f"Extraction Error: {e}")
+        print("Extraction Error:", e)
         return {}
 
 
@@ -156,7 +176,7 @@ async def whatsapp_webhook(
     try:
         text_to_process = Body
 
-        # If audio message received
+        # Audio message
         if MediaUrl0:
             text_to_process = transcribe_audio(MediaUrl0)
 
@@ -214,7 +234,7 @@ async def whatsapp_webhook(
 
     except Exception as e:
         db.rollback()
-        print(f"Webhook Error: {e}")
+        print("Webhook Error:", e)
 
         twiml.message(
             "An error occurred while processing your transaction."
