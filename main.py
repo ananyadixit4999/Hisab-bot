@@ -43,6 +43,14 @@ class Transaction(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+class PendingTransaction(Base):
+    __tablename__ = "pending_transactions"
+
+    phone_number = Column(String, primary_key=True)
+    data = Column(String)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI()
@@ -173,6 +181,65 @@ async def whatsapp_webhook(
 ):
     twiml = MessagingResponse()
 
+    msg = (Body or "").strip().lower()
+
+    # YES
+    if msg in ["हाँ", "ha", "haan", "yes"]:
+
+        pending = db.query(PendingTransaction).filter(
+            PendingTransaction.phone_number == From
+        ).first()
+
+        if pending:
+
+            data = json.loads(pending.data)
+
+            new_tx = Transaction(
+                id=str(uuid.uuid4()),
+                description=data.get("description", ""),
+                amount=float(data.get("amount", 0)),
+                language=data.get("language", "hi"),
+                status="confirmed"
+            )
+
+            db.add(new_tx)
+            db.delete(pending)
+            db.commit()
+
+            twiml.message(
+                "✅ हिसाब दर्ज कर लिया गया।"
+            )
+
+        else:
+            twiml.message(
+                "कोई लंबित एंट्री नहीं मिली।"
+            )
+
+        return Response(
+            content=str(twiml),
+            media_type="application/xml"
+        )
+
+    # NO
+    if msg in ["नहीं", "nahi", "nahin", "no"]:
+
+        pending = db.query(PendingTransaction).filter(
+            PendingTransaction.phone_number == From
+        ).first()
+
+        if pending:
+            db.delete(pending)
+            db.commit()
+
+        twiml.message(
+            "ठीक है। कृपया दोबारा लिखें या वॉइस मैसेज भेजें।"
+        )
+
+        return Response(
+            content=str(twiml),
+            media_type="application/xml"
+        )
+
     try:
         text_to_process = Body
 
@@ -182,7 +249,7 @@ async def whatsapp_webhook(
 
         if not text_to_process:
             twiml.message(
-                "Sorry, I couldn't understand the audio or message."
+                "माफ़ कीजिए, मैं संदेश समझ नहीं पाया।"
             )
             return Response(
                 content=str(twiml),
@@ -193,7 +260,7 @@ async def whatsapp_webhook(
 
         if not details or "amount" not in details:
             twiml.message(
-                "Could not extract transaction details. Please try again."
+                "लेन-देन की जानकारी नहीं मिली। कृपया फिर से प्रयास करें।"
             )
             return Response(
                 content=str(twiml),
@@ -208,36 +275,52 @@ async def whatsapp_webhook(
                 .strip()
             )
         except ValueError:
-            twiml.message("Invalid amount detected.")
+            twiml.message("राशि सही नहीं मिली। कृपया फिर से प्रयास करें।")
             return Response(
                 content=str(twiml),
                 media_type="application/xml"
             )
 
-        new_tx = Transaction(
-            id=str(uuid.uuid4()),
-            description=details.get(
-                "description",
-                "No description"
-            ),
-            amount=amount,
-            language=details.get("language", "en"),
-            status="confirmed"
-        )
+       pending = db.query(PendingTransaction).filter(
+    PendingTransaction.phone_number == From
+).first()
 
-        db.add(new_tx)
-        db.commit()
+if pending:
+    db.delete(pending)
+    db.commit()
 
-        twiml.message(
-            f"✅ Recorded: {new_tx.description} - ₹{new_tx.amount}"
-        )
+pending = PendingTransaction(
+    phone_number=From,
+    data=json.dumps(details)
+)
+
+db.add(pending)
+db.commit()
+
+twiml.message(
+    f"""मैंने यह समझा:
+
+{details.get('description', '')}
+
+राशि: ₹{amount}
+
+क्या यह सही है?
+
+उत्तर दें:
+
+हाँ
+
+या
+
+नहीं"""
+)
 
     except Exception as e:
         db.rollback()
         print("Webhook Error:", e)
 
         twiml.message(
-            "An error occurred while processing your transaction."
+            "लेन-देन दर्ज करते समय त्रुटि हुई।"
         )
 
     return Response(
