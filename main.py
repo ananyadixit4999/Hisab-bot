@@ -172,6 +172,7 @@ Return ONLY JSON:
 
 
 # ---------------- WhatsApp Webhook ----------------
+# ---------------- WhatsApp Webhook ----------------
 @app.post("/whatsapp")
 async def whatsapp_webhook(
     From: str = Form(...),
@@ -183,42 +184,41 @@ async def whatsapp_webhook(
 
     msg = (Body or "").strip().lower()
 
-    # YES
+    # YES = Save pending transaction
     if msg in ["हाँ", "ha", "haan", "yes"]:
 
-            pending = db.query(PendingTransaction).filter(
+        pending = db.query(PendingTransaction).filter(
             PendingTransaction.phone_number == From
         ).first()
 
         if pending:
+
+            data = json.loads(pending.data)
+
+            new_tx = Transaction(
+                id=str(uuid.uuid4()),
+                description=data.get("description", ""),
+                amount=float(str(data.get("amount", 0)).replace(",", "")),
+                language=data.get("language", "hi"),
+                status="confirmed"
+            )
+
+            db.add(new_tx)
             db.delete(pending)
             db.commit()
 
-        pending = PendingTransaction(
-            phone_number=From,
-            data=json.dumps(details)
+            twiml.message("✅ हिसाब दर्ज कर लिया गया।")
+
+        else:
+            twiml.message("कोई लंबित एंट्री नहीं मिली।")
+
+        return Response(
+            content=str(twiml),
+            media_type="application/xml"
         )
 
-        db.add(pending)
-        db.commit()
-
-        twiml.message(
-            f"""मैंने यह समझा:
-
-{details.get('description', '')}
-
-राशि: ₹{amount}
-
-क्या यह सही है?
-
-उत्तर दें:
-
-हाँ
-
-या
-
-नहीं"""
-        )
+    # NO = Cancel pending transaction
+    if msg in ["नहीं", "nahi", "nahin", "no"]:
 
         pending = db.query(PendingTransaction).filter(
             PendingTransaction.phone_number == From
@@ -272,30 +272,32 @@ async def whatsapp_webhook(
                 .strip()
             )
         except ValueError:
-            twiml.message("राशि सही नहीं मिली। कृपया फिर से प्रयास करें।")
+            twiml.message(
+                "राशि सही नहीं मिली। कृपया फिर से प्रयास करें।"
+            )
             return Response(
                 content=str(twiml),
                 media_type="application/xml"
             )
 
-       pending = db.query(PendingTransaction).filter(
-    PendingTransaction.phone_number == From
-).first()
+        pending = db.query(PendingTransaction).filter(
+            PendingTransaction.phone_number == From
+        ).first()
 
-if pending:
-    db.delete(pending)
-    db.commit()
+        if pending:
+            db.delete(pending)
+            db.commit()
 
-pending = PendingTransaction(
-    phone_number=From,
-    data=json.dumps(details)
-)
+        pending = PendingTransaction(
+            phone_number=From,
+            data=json.dumps(details)
+        )
 
-db.add(pending)
-db.commit()
+        db.add(pending)
+        db.commit()
 
-twiml.message(
-    f"""मैंने यह समझा:
+        twiml.message(
+            f"""मैंने यह समझा:
 
 {details.get('description', '')}
 
@@ -310,7 +312,7 @@ twiml.message(
 या
 
 नहीं"""
-)
+        )
 
     except Exception as e:
         db.rollback()
@@ -324,8 +326,6 @@ twiml.message(
         content=str(twiml),
         media_type="application/xml"
     )
-
-
 # ---------------- Health Check ----------------
 @app.get("/")
 def health_check():
